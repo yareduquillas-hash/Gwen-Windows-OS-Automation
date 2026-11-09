@@ -1,0 +1,83 @@
+GOOGLE DRIVE — PASOS PARA JARVIS
+═══════════════════════════════════════════════════════════
+
+Tiempo estimado: 5 minutos. Solo se hace UNA vez.
+
+═══════════════════════════════════════════════════════════
+PASO 1 — Crear proyecto en Google Cloud
+═══════════════════════════════════════════════════════════
+
+1. Abre: https://console.cloud.google.com
+2. Arriba a la izquierda, junto al logo de Google Cloud,
+   haz clic en el selector de proyecto → "NUEVO PROYECTO"
+3. Nombre: "JARVIS Drive"
+4. Haz clic en "CREAR"
+5. Espera 10 segundos a que se cree.
+6. Arriba, asegúrate de que el proyecto "JARVIS Drive"
+   esté seleccionado.
+
+═══════════════════════════════════════════════════════════
+PASO 2 — Habilitar Google Drive API
+═══════════════════════════════════════════════════════════
+
+1. En el buscador superior, escribe: "Google Drive API"
+2. Haz clic en "Google Drive API" (resultado con el icono
+   del triángulo de Drive)
+3. Haz clic en el botón azul "HABILITAR"
+4. Espera 5 segundos.
+
+═══════════════════════════════════════════════════════════
+PASO 3 — Crear credenciales OAuth
+═══════════════════════════════════════════════════════════
+
+1. En la barra lateral izquierda, haz clic en "Credenciales"
+2. Arriba, haz clic en "+ CREAR CREDENCIALES"
+3. Selecciona: "ID de cliente de OAuth"
+4. Te pedirá configurar la pantalla de consentimiento:
+   - Haz clic en "CONFIGURAR PANTALLA DE CONSENTIMIENTO"
+   - Elige "Externo" → "CREAR"
+   - Nombre de la app: "JARVIS"
+   - Email: el que ya tienes seleccionado
+   - Email de desarrollador: el mismo
+   - Haz clic en "GUARDAR Y CONTINUAR" (3 veces, sin tocar nada más)
+   - Final: "VOLVER AL PANEL"
+5. Ahora vuelve a "+ CREAR CREDENCIALES" → "ID de cliente de OAuth"
+6. Tipo de aplicación: "Aplicación de escritorio"
+7. Nombre: "JARVIS Desktop"
+8. Haz clic en "CREAR"
+9. En la ventana que aparece, haz clic en "DESCARGAR JSON"
+10. Aparecerá un botón adicional: "IR A CREDENCIALES" — ignóralo
+
+═══════════════════════════════════════════════════════════
+PASO 4 — Guardar el archivo en JARVIS
+═══════════════════════════════════════════════════════════
+
+1. El archivo descargado se llama algo como:
+   client_secret_XXXXX.apps.googleusercontent.com.json
+
+2. RENÓMBRALO a: credentials.json
+
+3. MUÉVELO a esta carpeta:
+   C:\Users\admin\Desktop\jarvis_windows_pro\data\
+
+   Ruta final:
+   C:\Users\admin\Desktop\jarvis_windows_pro\data\credentials.json
+
+═══════════════════════════════════════════════════════════
+PASO 5 — Autenticarse la primera vez
+═══════════════════════════════════════════════════════════
+
+La primera vez que uses /drive, JARVIS te dirá:
+"Google Drive no está autenticado."
+
+Simplemente dile "autentica google drive" y te dará un link.
+Ábrelo en el navegador, inicia sesión con tu cuenta Google,
+copia el código que aparece y envíalo por Telegram.
+
+A partir de ahí, todas las subidas a Drive son automáticas.
+(el token se guarda en data/google_token.json)
+
+═══════════════════════════════════════════════════════════
+LISTO. Prueba: "busca y envíame el video de la boda"
+Si el archivo >50MB, JARVIS te ofrecerá /drive.
+═══════════════════════════════════════════════════════════

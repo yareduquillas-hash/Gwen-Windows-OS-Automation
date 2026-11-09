@@ -1,0 +1,25 @@
+CAPTURA DEL BOTÓN JUGAR DE GEFORCE NOW
+═══════════════════════════════════════════
+
+Para que JARVIS pueda hacer clic automáticamente en "JUGAR",
+necesito que captures una imagen del botón:
+
+1. Abre GeForce NOW manualmente
+2. Busca cualquier juego de tu biblioteca
+3. Haz clic en él para ver la pantalla con el botón verde "JUGAR"
+4. Usa la herramienta Recortes de Windows (Win+Shift+S)
+5. Recorta SOLO el botón "JUGAR" (el rectángulo verde)
+6. Guárdalo aquí mismo con el nombre exacto:
+
+   btn_play.png
+
+   Ruta completa:
+   C:\Users\admin\Desktop\jarvis_windows_pro\data\assets\btn_play.png
+
+CONSEJOS:
+- Recorta solo el botón, no la pantalla entera
+- Si el botón dice "JUGAR" en mayúsculas, captura solo esa palabra
+- Formato PNG, fondo transparente mejor que con fondo
+
+Sin esta imagen, JARVIS usará el teclado (Tab + Enter) como fallback,
+que funciona en la mayoría de los casos pero es menos fiable.

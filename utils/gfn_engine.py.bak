@@ -1,0 +1,529 @@
+from __future__ import annotations
+
+import logging
+import os
+import re
+import time as _time
+import threading
+
+log = logging.getLogger("jarvis.gfn")
+
+DESKTOP = os.path.expandvars(r"%USERPROFILE%\Desktop")
+
+QUEUE_TEXTS = (
+    "buscando el proximo equipo disponible",
+    "buscando el próximo equipo disponible",
+    "looking for the next available rig",
+    "jugadores por delante de usted",
+    "players ahead of you",
+    "gamers ahead of you",
+)
+
+WARNING_TEXTS = (
+    "conexion", "conexión", "requisitos", "no cumple",
+    "analizando red", "analizando", "problema de red",
+    "network", "connection", "bandwidth",
+    "continuar", "probar de nuevo", "continue", "try again",
+)
+
+LOGIN_TEXTS = (
+    "iniciar sesion", "iniciar sesión", "login", "sign in",
+    "correo", "email", "contraseña", "password",
+)
+
+HOME_TEXTS = (
+    "biblioteca", "library", "tus juegos", "my library",
+    "todos los juegos", "all games",
+)
+
+
+class GFNEngine:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.delay = cfg.gfn_action_delay
+        self._monitoring = False
+        self._cancel = threading.Event()
+        self._region = getattr(cfg, 'gfn_queue_region', None)
+        self._last_queue_count = None
+        self._easyocr_reader = None
+
+    # ── OCR Engine ──
+
+    def _get_reader(self):
+        if self._easyocr_reader is None:
+            import easyocr
+            self._easyocr_reader = easyocr.Reader(["es", "en"], gpu=False)
+        return self._easyocr_reader
+
+    def _ocr_text(self, region=None) -> str:
+        try:
+            import pyautogui
+            import numpy as np
+            img_pil = pyautogui.screenshot()
+            img = np.array(img_pil)
+            if region:
+                top = max(0, int(region.get("top", 0)))
+                left = max(0, int(region.get("left", 0)))
+                w = int(region.get("width", img.shape[1]))
+                h = int(region.get("height", img.shape[0]))
+                img = img[top:top+h, left:left+w]
+            reader = self._get_reader()
+            results = reader.readtext(img, detail=0)
+            return " ".join(results).lower()
+        except Exception as exc:
+            log.debug("OCR fallo: %s", exc)
+            return ""
+
+    def _ocr_region_center(self, w=900, h=400) -> str:
+        try:
+            import pygetwindow as gw
+            wins = gw.getWindowsWithTitle("GeForce NOW")
+            for win in wins:
+                if win.visible and not win.isMinimized:
+                    monitor = {
+                        "top": max(0, win.top),
+                        "left": max(0, win.left),
+                        "width": max(200, win.width),
+                        "height": max(200, win.height),
+                    }
+                    text = self._ocr_text(monitor)
+                    if text and len(text) > 3:
+                        return text
+        except Exception as exc:
+            log.debug("No se pudo calcular la región de ventana GFN: %s", exc)
+        return self._ocr_text()
+
+    # ── Accesos directos ──
+
+    def _find_shortcut(self, name: str | None = None) -> str | None:
+        userprofile = os.environ.get("USERPROFILE", r"C:\Users\admin")
+        onedrive = os.environ.get("ONEDRIVE")
+        desktop_dirs = [
+            DESKTOP,
+            os.path.join(userprofile, "Desktop"),
+            os.path.join(userprofile, "Escritorio"),
+        ]
+        if onedrive:
+            desktop_dirs.extend([
+                os.path.join(onedrive, "Desktop"),
+                os.path.join(onedrive, "Escritorio"),
+            ])
+        # Deduplicar preservando orden
+        desktop_dirs = list(dict.fromkeys(d for d in desktop_dirs if os.path.exists(d)))
+
+        if name:
+            name_clean = name.lower().strip().strip('"').strip("'").strip("!.").strip()
+            # 1. Chequeo por patrones exactos
+            for d in desktop_dirs:
+                patterns = [
+                    os.path.join(d, f"{name_clean} en GeForce NOW.lnk"),
+                    os.path.join(d, f"{name_clean}.lnk"),
+                ]
+                for p in patterns:
+                    if os.path.isfile(p):
+                        return p
+
+            # 2. Búsqueda por subcadena
+            for d in desktop_dirs:
+                for f in os.listdir(d):
+                    if f.lower().endswith(".lnk") and name_clean in f.lower():
+                        return os.path.join(d, f)
+
+            # 3. Búsqueda por palabras individuales (ej. 'genshin' -> 'Genshin Impact')
+            palabras = [w for w in name_clean.split() if len(w) > 2]
+            if palabras:
+                for d in desktop_dirs:
+                    for f in os.listdir(d):
+                        if f.lower().endswith(".lnk") and any(w in f.lower() for w in palabras):
+                            return os.path.join(d, f)
+
+            return None
+
+        # Acceso directo genérico de GeForce NOW
+        for d in desktop_dirs:
+            generic = os.path.join(d, "NVIDIA GeForce NOW.lnk")
+            if os.path.isfile(generic):
+                return generic
+            for f in os.listdir(d):
+                if f.lower().endswith(".lnk") and "geforce" in f.lower():
+                    return os.path.join(d, f)
+        return None
+
+    def _launch_shortcut(self, path: str) -> bool:
+        try:
+            os.startfile(path)
+            return True
+        except Exception:
+            import subprocess
+            try:
+                subprocess.run(["cmd", "/c", "start", "", path], shell=True, timeout=10)
+                return True
+            except Exception:
+                return False
+
+    def open(self) -> bool:
+        if self.is_open():
+            return True
+        shortcut = self._find_shortcut()
+        if shortcut:
+            return self._launch_shortcut(shortcut)
+        return False
+
+    def is_open(self) -> bool:
+        try:
+            import pygetwindow as gw
+            return any("GeForce NOW" in w.title for w in gw.getAllWindows())
+        except Exception:
+            return False
+
+    def _focus_window(self) -> bool:
+        import pygetwindow as gw
+        try:
+            for w in gw.getAllWindows():
+                if "GeForce NOW" in w.title:
+                    if w.isMinimized:
+                        w.restore()
+                    w.activate()
+                    _time.sleep(0.8)
+                    w.maximize()
+                    _time.sleep(1)
+                    return True
+        except Exception:
+            pass
+        return False
+
+    # ── State classification ──
+
+    def _classify_state(self, text: str) -> str:
+        if not text or len(text) < 3:
+            return "LOADING"
+        if any(w in text for w in LOGIN_TEXTS):
+            return "LOGIN"
+        if any(w in text for w in WARNING_TEXTS):
+            return "WARNING"
+        if any(w in text for w in QUEUE_TEXTS) or "jugadores" in text or "ahead" in text or "espera" in text:
+            return "QUEUE"
+        if "jugar" in text or "play" in text or "iniciar" in text:
+            return "GAME_PAGE"
+        if any(w in text for w in HOME_TEXTS):
+            return "HOME"
+        return "UNKNOWN"
+
+    # ── Actions ──
+
+    def _dismiss_warning(self) -> None:
+        import pyautogui
+        log.info("Cerrando aviso/popup")
+        pyautogui.press("enter")
+        _time.sleep(0.5)
+        pyautogui.press("tab")
+        _time.sleep(0.3)
+        pyautogui.press("enter")
+        _time.sleep(1.5)
+
+    def _search_game(self, name: str) -> None:
+        import pyautogui
+        log.info("Buscando juego: '%s'", name)
+        pyautogui.hotkey("ctrl", "f")
+        _time.sleep(1.2)
+        pyautogui.hotkey("ctrl", "a")
+        pyautogui.press("backspace")
+        pyautogui.write(name, interval=0.03)
+        _time.sleep(0.5)
+        pyautogui.press("enter")
+        _time.sleep(2.0)
+        pyautogui.press("enter")  # Pulsar Enter de nuevo para abrir/lanzar la tarjeta
+        _time.sleep(2.0)
+
+    def _click_play(self) -> bool:
+        import pyautogui
+        import cv2
+        import numpy as np
+        btn_path = str(self.cfg.assets_dir / "btn_jugar.png")
+        if os.path.isfile(btn_path):
+            try:
+                template = cv2.imread(btn_path)
+                if template is not None:
+                    import mss
+                    with mss.mss() as sct:
+                        screen = np.array(sct.grab(sct.monitors[1]))
+                        screen = screen[:, :, :3]
+                    result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                    if max_val > 0.65:
+                        h, w = template.shape[:2]
+                        center = (max_loc[0] + w // 2, max_loc[1] + h // 2)
+                        pyautogui.click(center)
+                        _time.sleep(2)
+                        log.info("Click JUGAR via OpenCV (conf=%.2f)", max_val)
+                        return True
+            except Exception as exc:
+                log.debug("OpenCV match fallo: %s", exc)
+        pyautogui.press("enter")
+        _time.sleep(2)
+        log.info("Click JUGAR via Enter")
+        return True
+
+    def _parse_queue_count(self, text: str) -> int | None:
+        patterns = [
+            r"jugadores por delante de usted[:\s]*(\d+)",
+            r"players ahead of you[:\s]*(\d+)",
+            r"gamers ahead of you[:\s]*(\d+)",
+            r"posición[:\s]*#?\s*(\d+)",
+            r"position[:\s]*#?\s*(\d+)",
+            r"delante[:\s]*#?\s*(\d+)",
+            r"(\d+)\s*jugadores",
+            r"(\d+)\s*players",
+        ]
+        for p in patterns:
+            m = re.search(p, text.lower())
+            if m:
+                return int(m.group(1))
+        return None
+
+    # ── Visual state machine loop ──
+
+    def _visual_loop(self, game_name: str, chat_id: int, bot, cfg, platform) -> str | None:
+        import pyautogui
+        start = _time.time()
+        timeout = 45
+        self._focus_window()
+        _time.sleep(2)
+        intentos_unknown = 0
+
+        while _time.time() - start < timeout:
+            if self._detect_streaming():
+                return "PLAYING"
+
+            text = self._ocr_region_center()
+            state = self._classify_state(text)
+            log.info("GFN state: %s | OCR snippet: %s", state, text[:120])
+
+            if state == "WARNING":
+                bot.send_message(chat_id, "⚠️ Aviso detectado en GFN. Omitiendo popup...")
+                self._dismiss_warning()
+                _time.sleep(2)
+                continue
+
+            if state == "LOGIN":
+                bot.send_message(chat_id, f"🔐 GFN pide iniciar sesión, {cfg.user_title}. Hágalo y luego dígame 'lanza {game_name}'.")
+                return "ABORT"
+
+            if state == "HOME":
+                bot.send_message(chat_id, f"🔍 Buscando {game_name} en GeForce NOW...")
+                self._search_game(game_name)
+                _time.sleep(3)
+                continue
+
+            if state == "GAME_PAGE":
+                bot.send_message(chat_id, f"▶️ Pulsando JUGAR para {game_name}...")
+                self._click_play()
+                _time.sleep(3)
+                continue
+
+            if state == "QUEUE":
+                count = self._parse_queue_count(text)
+                if count is not None:
+                    bot.send_message(chat_id, f"⏳ Cola detectada: *{count}* jugadores por delante. Monitorizando...")
+                else:
+                    bot.send_message(chat_id, f"⏳ Cola detectada. Monitorizando, {cfg.user_title}...")
+                return "QUEUE"
+
+            if state == "UNKNOWN":
+                intentos_unknown += 1
+                if intentos_unknown >= 2:
+                    log.info("Estado UNKNOWN persistente. Intentando pulsar Enter para avanzar...")
+                    pyautogui.press("enter")
+                    _time.sleep(2)
+
+            _time.sleep(2)
+
+        return "TIMEOUT"
+
+    # ── Queue monitor ──
+
+    def _queue_monitor(self, game_name: str, chat_id: int, bot, cfg, platform) -> None:
+        self._cancel.clear()
+        last_count = None
+        ciclos_sin_ocr = 0
+        start = _time.time()
+        timeout = cfg.gfn_queue_timeout_minutes * 60
+        poll = cfg.gfn_queue_poll_interval
+
+        bot.send_message(
+            chat_id,
+            f"🎮 Monitorizando cola de *{game_name}* cada {poll}s.\n"
+            f"Le avisaré en cada cambio, {cfg.user_title}."
+        )
+
+        while _time.time() - start < timeout:
+            if self._cancel.is_set():
+                bot.send_message(chat_id, f"⏹ Monitoreo de {game_name} cancelado.")
+                return
+
+            # ── ¿Ya está jugando? ──
+            if self._detect_streaming():
+                bot.send_message(
+                    chat_id,
+                    f"🟢 *¡{game_name} está listo, {cfg.user_title}!* \n"
+                    f"El juego ya está corriendo. ¡A jugar!"
+                )
+                try:
+                    platform.set_volume(cfg.gfn_gaming_volume)
+                except Exception:
+                    pass
+                return
+
+            text = self._ocr_region_center(900, 300)
+            log.debug("[QueueMonitor] OCR: %s", text[:100])
+
+            # ── Avisos / popups ──
+            if any(w in text for w in WARNING_TEXTS):
+                bot.send_message(chat_id, "⚠️ Aviso detectado en GFN. Cerrando popup...")
+                self._dismiss_warning()
+                _time.sleep(2)
+                continue
+
+            # ── Login requerido ──
+            if any(w in text for w in LOGIN_TEXTS):
+                bot.send_message(chat_id, f"🔐 GFN pide iniciar sesión, {cfg.user_title}. Hágalo y seguiré monitorizando.")
+                _time.sleep(poll)
+                continue
+
+            # ── Número de cola ──
+            count = self._parse_queue_count(text)
+            if count is not None:
+                ciclos_sin_ocr = 0
+                if last_count is None:
+                    bot.send_message(chat_id, f"⏳ Cola de {game_name}: *{count}* jugadores por delante.")
+                    last_count = count
+                elif count < last_count:
+                    diff = last_count - count
+                    bot.send_message(chat_id, f"📉 Cola avanza: *{count}* jugadores por delante (-{diff}).")
+                    last_count = count
+                    if count <= 5:
+                        bot.send_message(chat_id, f"🏁 ¡Casi llega, {cfg.user_title}! Quedan solo {count} jugadores.")
+            elif any(w in text for w in QUEUE_TEXTS):
+                # Cola activa pero sin número legible
+                ciclos_sin_ocr += 1
+                if ciclos_sin_ocr % 3 == 1:
+                    elapsed = int(_time.time() - start)
+                    bot.send_message(chat_id, f"⏳ Cola activa para {game_name} ({elapsed//60}m {elapsed%60}s en espera). Sin número visible aún.")
+            else:
+                ciclos_sin_ocr += 1
+                if ciclos_sin_ocr % 6 == 1 and ciclos_sin_ocr > 0:
+                    elapsed = int(_time.time() - start)
+                    bot.send_message(chat_id, f"🔍 Sigo esperando turno para {game_name}... ({elapsed//60}m {elapsed%60}s)")
+
+            _time.sleep(poll)
+
+        elapsed_total = int(_time.time() - start)
+        bot.send_message(
+            chat_id,
+            f"⏰ La cola de *{game_name}* superó los {cfg.gfn_queue_timeout_minutes} min ({elapsed_total//60}m total).\n"
+            f"Sigo monitorizando en segundo plano. Dígame 'cancela la cola' si desea detener."
+        )
+
+    def _detect_streaming(self, game_name: str | None = None) -> bool:
+        import psutil
+        import pygetwindow as gw
+
+        # 1. Comprobar si hay una ventana de GeForce NOW visible y no minimizada en pantalla
+        try:
+            for w in gw.getAllWindows():
+                if "geforce" in w.title.lower() or "nvidia" in w.title.lower():
+                    if w.visible and not w.isMinimized and w.width > 200:
+                        return True
+        except Exception:
+            pass
+
+        # 2. Comprobar si hay procesos activos de streaming, CEF o cmdline de lanzamiento
+        for p in psutil.process_iter(["name", "cmdline"]):
+            try:
+                name = (p.info.get("name") or "").lower()
+                if any(k in name for k in ("geforcenowstreamer", "nvstreamer")):
+                    return True
+
+                cmdline = " ".join(p.info.get("cmdline") or []).lower()
+                if "launchsource=external" in cmdline or "cmsid=" in cmdline or "shortname=" in cmdline:
+                    if game_name:
+                        words = [w for w in game_name.lower().split() if len(w) > 2]
+                        if any(w in cmdline for w in words):
+                            return True
+                    else:
+                        return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        return False
+
+    def cancel_queue(self) -> None:
+        self._cancel.set()
+
+    def _light_queue_monitor(self, game_name: str, chat_id: int, bot, cfg, platform) -> None:
+        """Monitoreo liviano de proceso/ventana GeForce NOW (0% uso GPU/CPU)."""
+        start = _time.time()
+        timeout = cfg.gfn_queue_timeout_minutes * 60
+        poll = 5  # Verificar cada 5s para una respuesta rápida
+
+        bot.send_message(
+            chat_id,
+            f"🔄 *{game_name}* enviado a ejecutar.\n"
+            f"Quedo en segundo plano monitoreando para avisarle apenas esté listo, {cfg.user_title}."
+        )
+
+        while _time.time() - start < timeout:
+            if self._cancel.is_set():
+                bot.send_message(chat_id, f"⏹ Monitoreo de {game_name} cancelado.")
+                return
+
+            if self._detect_streaming(game_name):
+                bot.send_message(
+                    chat_id,
+                    f"🟢 *¡{game_name} está listo, {cfg.user_title}!* \n"
+                    f"El juego ya está en ejecución. ¡A disfrutar!"
+                )
+                if cfg.gfn_gaming_volume > 0:
+                    try:
+                        platform.set_volume(cfg.gfn_gaming_volume)
+                    except Exception:
+                        pass
+                return
+
+            _time.sleep(poll)
+
+        bot.send_message(
+            chat_id,
+            f"⏰ Pasaron {cfg.gfn_queue_timeout_minutes} min sin detectar la ventana de juego de *{game_name}*.\n"
+            f"Si el juego ya abrió, ¡buena partida, {cfg.user_title}!"
+        )
+
+    # ── Flujo principal (Requisito estricto: Acceso directo en escritorio) ──
+
+    def launch_game(self, name: str, chat_id: int, bot, cfg, platform) -> None:
+        self._cancel.clear()
+        game_shortcut = self._find_shortcut(name)
+
+        if not game_shortcut:
+            bot.send_message(
+                chat_id,
+                f"❌ No encontré el acceso directo de *{name}* en su escritorio, {cfg.user_title}.\n\n"
+                f"📌 *Requisito:* Cree el acceso directo en el escritorio desde GeForce NOW "
+                f"(por ejemplo: `{name} en GeForce NOW.lnk` o `{name}.lnk`) para poder lanzarlo."
+            )
+            return
+
+        bot.send_message(chat_id, f"🎮 Lanzando *{name}* vía acceso directo en el escritorio...")
+        if not self._launch_shortcut(game_shortcut):
+            bot.send_message(chat_id, f"❌ No pude ejecutar el acceso directo de {name}, {cfg.user_title}.")
+            return
+
+        bot.send_message(
+            chat_id,
+            f"🔄 Acceso directo ejecutado. Le avisaré tan pronto *{name}* esté corriendo."
+        )
+        threading.Thread(
+            target=self._light_queue_monitor,
+            args=(name, chat_id, bot, cfg, platform),
+            daemon=True,
+        ).start()

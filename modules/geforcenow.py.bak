@@ -1,0 +1,152 @@
+import threading
+from modules.base import BaseModule
+from utils.gfn_engine import GFNEngine
+
+
+class GeForceNowModule(BaseModule):
+    nombre = "geforcenow"
+    prioridad = 45
+
+    _engine: GFNEngine | None = None
+
+    def _get_engine(self, cfg):
+        if self._engine is None:
+            self._engine = GFNEngine(cfg)
+        return self._engine
+
+    def can_handle(self, texto: str) -> bool:
+        t = texto.lower().strip()
+        triggers = (
+            "prepárame el entorno de juego", "preparame el entorno de juego",
+            "entorno de juego", "modo juego", "prepárame para jugar",
+            "preparame para jugar", "quiero jugar", "juega", "lanza",
+            "abre geforce", "abrir geforce", "inicia geforce", "iniciar geforce",
+            "cómo va la cola", "como va la cola", "estado de la cola",
+            "qué posición", "cuánto falta", "cancela la cola",
+            "cancelar cola", "sal de la cola", "qué juegos tengo",
+            "que juegos tengo", "abre geforce now", "abre y pon",
+            "abre geforce y", "forzar monitoreo", "cola", "jugar a", "jugar ",
+            "pon ", "abre ", "abrir ", "inicia ", "iniciar ", "ejecuta "
+        )
+        return any(p in t for p in triggers)
+
+    def handle(self, texto: str, chat_id: int, bot, cfg, platform) -> bool:
+        t = texto.lower().strip()
+        engine = self._get_engine(cfg)
+
+        if t in ("cola", "forzar monitoreo", "forzar monitorizacion"):
+            text = engine._ocr_region_center(900, 300)
+            if "jugadores" in text or "buscando" in text or "players" in text:
+                bot.send_message(chat_id, f"Monitorizando cola, {cfg.user_title}...")
+                threading.Thread(
+                    target=engine._queue_monitor,
+                    args=("el juego", chat_id, bot, cfg, platform),
+                    daemon=True,
+                ).start()
+            else:
+                bot.send_message(chat_id, "No detecto cola activa en GFN, Señor.")
+            return True
+
+        if any(p in t for p in ("prepárame el entorno de juego", "preparame el entorno de juego",
+                                  "entorno de juego", "modo juego",
+                                  "prepárame para jugar", "preparame para jugar")):
+            game = self._extract_game(texto, t, (
+                "prepárame el entorno de juego", "preparame el entorno de juego",
+                "entorno de juego", "modo juego", "prepárame para jugar",
+                "preparame para jugar",
+            ))
+            return self._setup_and_launch(game, chat_id, bot, cfg, platform, engine)
+
+        if any(p in t for p in ("abre geforce y", "abre y pon", "abre y juega")):
+            game = self._extract_game(texto, t, ("abre geforce y", "abre y pon", "abre y juega"))
+            if game:
+                return self._setup_and_launch(game, chat_id, bot, cfg, platform, engine)
+            bot.send_message(chat_id, "Qué juego desea, Señor?")
+            return True
+
+        if any(p in t for p in ("quiero jugar", "juega ", "lanza ", "ponme ", "jugar a ", "jugar ", "pon ", "abre ", "abrir ", "inicia ", "iniciar ", "ejecuta ")):
+            game = self._extract_game(texto, t, (
+                "prepárame el entorno de juego", "preparame el entorno de juego",
+                "entorno de juego", "modo juego", "prepárame para jugar",
+                "preparame para jugar", "quiero jugar a ", "quiero jugar ",
+                "juega a ", "juega ", "lanza ", "ponme ", "jugar a ", "jugar ",
+                "pon ", "abre ", "abrir ", "inicia ", "iniciar ", "ejecuta "
+            ))
+            if not game:
+                bot.send_message(chat_id, f"¿Qué juego desea lanzar, {cfg.user_title}?")
+                return True
+            threading.Thread(
+                target=engine.launch_game,
+                args=(game, chat_id, bot, cfg, platform),
+                daemon=True,
+            ).start()
+            return True
+
+        if any(p in t for p in ("abre geforce", "abrir geforce", "inicia geforce")):
+            if engine.open():
+                bot.send_message(chat_id, "GeForce NOW abierto, Señor.")
+            else:
+                bot.send_message(chat_id, "No pude abrir GFN. ¿Tiene el acceso directo en el escritorio?")
+            return True
+
+        if any(p in t for p in ("cómo va la cola", "como va la cola", "estado de la cola",
+                                  "qué posición", "cuánto falta")):
+            text = engine._ocr_region_center(900, 300)
+            count = engine._parse_queue_count(text)
+            if count is not None:
+                bot.send_message(chat_id, f"Jugadores por delante: {count}, {cfg.user_title}.")
+            elif any(w in text for w in ("buscando", "jugadores", "players")):
+                bot.send_message(chat_id, "Cola activa detectada pero no pude leer el número exacto, Señor.")
+            elif engine._detect_streaming():
+                bot.send_message(chat_id, "¡Ya está jugando, Señor! No hay cola.")
+            else:
+                bot.send_message(chat_id, "No detecto cola activa. ¿GFN está abierto?")
+            return True
+
+        if any(p in t for p in ("cancela la cola", "cancelar cola", "sal de la cola")):
+            engine.cancel_queue()
+            bot.send_message(chat_id, "Monitoreo de cola cancelado, Señor.")
+            return True
+
+        if any(p in t for p in ("qué juegos tengo", "que juegos tengo")):
+            games = cfg.gfn_quick_games
+            if games:
+                bot.send_message(chat_id, f"Juegos configurados, {cfg.user_title}:\n" + "\n".join(f"  • {g}" for g in games))
+            else:
+                bot.send_message(chat_id, "No hay juegos en GFN_QUICK_GAMES.")
+            return True
+
+        return False
+
+    def _extract_game(self, texto: str, t_lower: str, prefixes: tuple[str, ...]) -> str | None:
+        for pref in prefixes:
+            if pref in t_lower:
+                rest = texto.split(pref, 1)[-1].strip().strip('"').strip("'").lstrip("-:").strip()
+                if rest and len(rest) > 1:
+                    return rest
+        return None
+
+    def _setup_and_launch(self, game: str, chat_id: int, bot, cfg, platform, engine) -> bool:
+        bot.send_message(chat_id, f"Preparando entorno de juego, {cfg.user_title}...")
+        if cfg.gfn_gaming_volume > 0:
+            try:
+                platform.set_volume(cfg.gfn_gaming_volume)
+            except Exception:
+                pass
+        if not game:
+            games = cfg.gfn_quick_games
+            if games:
+                game = games[0]
+                bot.send_message(chat_id, f"No especificó juego. Usando: {game}")
+            else:
+                bot.send_message(chat_id, "Qué juego desea lanzar, Señor?")
+                return True
+        threading.Thread(
+            target=engine.launch_game,
+            args=(game, chat_id, bot, cfg, platform),
+            daemon=True,
+        ).start()
+        return True
+
+
+MODULE_CLASS = GeForceNowModule

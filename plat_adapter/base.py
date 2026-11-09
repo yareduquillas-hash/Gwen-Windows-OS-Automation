@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any
+
+
+class PlatformAdapter(ABC):
+    @abstractmethod
+    def get_battery(self) -> dict[str, str]: ...
+
+    @abstractmethod
+    def get_system_info(self) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def set_volume(self, level: int) -> bool: ...
+
+    @abstractmethod
+    def get_volume(self) -> int: ...
+
+    @abstractmethod
+    def send_media_key(self, key: str) -> bool: ...
+
+    @abstractmethod
+    def copy_to_clipboard(self, text: str) -> bool: ...
+
+    @abstractmethod
+    def take_screenshot(self) -> bytes | None: ...
+
+    @abstractmethod
+    def lock_screen(self) -> bool: ...
+
+    @abstractmethod
+    def shutdown(self) -> bool: ...
+
+    @abstractmethod
+    def reboot(self) -> bool: ...
+
+    @abstractmethod
+    def get_shell(self) -> str: ...
+
+    @abstractmethod
+    def install_package(self, name: str) -> bool: ...
+
+    @abstractmethod
+    def get_running_processes(self, top_n: int = 10) -> list[dict]: ...
+
+    @abstractmethod
+    def kill_process(self, name: str) -> bool: ...
+
+    @abstractmethod
+    def get_windows(self) -> list[str]: ...
+
+    @abstractmethod
+    def focus_window(self, title: str) -> bool: ...
+
+    @abstractmethod
+    def minimize_all(self) -> bool: ...
+
+    @abstractmethod
+    def send_notification(self, title: str, message: str) -> bool: ...
+
+    @abstractmethod
+    def open_url(self, url: str) -> bool: ...

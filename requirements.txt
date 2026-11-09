@@ -1,0 +1,46 @@
+# ============================================
+# CORE — Siempre requeridos
+# ============================================
+pytelegrambotapi>=4.0
+python-dotenv>=1.0
+
+# ============================================
+# VOZ — TTS + STT
+# ============================================
+edge-tts>=6.0
+pydub>=0.25
+SpeechRecognition>=3.10
+pyaudio>=0.2
+
+# ============================================
+# WINDOWS — GUI Automation + Sistema
+# ============================================
+pyautogui>=0.9.54
+pygetwindow>=0.0.9
+pycaw>=20240210
+comtypes>=1.4
+psutil>=6.0
+pyperclip>=1.8
+Pillow>=10.0
+win10toast>=0.9
+
+# ============================================
+# GEFORCE NOW — Ultra-Liviano State Machine v3
+# ============================================
+# (Usa psutil + pygetwindow nativos)
+
+# ============================================
+# ARCHIVOS GRANDES — Google Drive + transfer.sh
+# ============================================
+google-api-python-client>=2.0
+google-auth-httplib2>=0.2
+google-auth-oauthlib>=1.2
+requests>=2.32
+requests-toolbelt>=1.0
+# ============================================
+# API SERVER — App Android & WebSockets
+# ============================================
+fastapi>=0.111
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+websockets>=12.0

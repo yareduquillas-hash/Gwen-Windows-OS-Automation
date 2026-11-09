@@ -1,0 +1,36 @@
+# Secrets and local configuration
+.env
+Gwen Key.txt
+data/credentials.json
+data/google_token.json
+data/*.json
+data/*.key
+data/*.pem
+
+# Runtime state and private user data
+data/*.db
+data/*.db-*
+data/*.log
+data/config_override.json
+data/config_backups/
+data/cache/
+data/descargas/
+data/archivos/
+stdout.log
+stderr.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Android/Gradle
+android_app/.gradle/
+android_app/build/
+android_app/app/build/
+*.iml
